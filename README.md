@@ -14,6 +14,14 @@ Plugin universal para download de imagens de satélite que combina dados globais
 
 Baixe a versão empacotada do plugin em **[Releases](https://github.com/samuel-c-santos/qgis-satellite-downloader/releases)** basta extrair, configurar as credenciais e usar.
 
+## Galeria
+
+| Gerenciador de Complementos | Landsat |
+|:---:|:---:|
+| ![Gerenciador](demo/home.png) | ![Landsat](demo/aplicacao.png) |
+| **Sentinel** | **CBERS-4A** |
+| ![Sentinel](demo/aplicacao2.png) | ![CBERS](demo/aplicacao3.png) |
+
 ## Documentação
 
 | Guia | Descrição |
