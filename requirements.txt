@@ -1,0 +1,7 @@
+earthengine-api
+requests
+python-dotenv
+cbers4asat
+geopandas
+rasterio
+shapely

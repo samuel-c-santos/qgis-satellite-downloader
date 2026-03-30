@@ -1,0 +1,28 @@
+[general]
+name=QGIS Satellite Downloader
+qgisMinimumVersion=3.0
+description=Plugin para download de imagens Sentinel, Landsat e CBERS-4A via GEE e INPE. Desenvolvido por Samuel Santos.
+about=<b>QGIS Satellite Downloader</b>
+  <i>Plugin para download de imagens orbitais (Sentinel, Landsat e CBERS-4A) via Google Earth Engine e INPE.</i>
+  <br><br>
+  <b>Recursos Principais:</b>
+  - Download de Sentinel, Landsat e CBERS-4A
+  - Seleção por Extensão (Mapa ou Camadas)
+  - Fator de Buffer Configurável
+  - Interpolação Cúbica Automática.
+  <br><br>
+  <b>Suporte:</b> Samuel Santos
+  - <a href="https://www.linkedin.com/in/samuelsantos-amb/">LinkedIn</a>
+  - <a href="https://github.com/samuel-c-santos">GitHub</a>
+  - <a href="https://samuelsantos.site/">Site Pessoal</a>
+version=1.0
+author=Samuel Santos
+email=samuel@samuelsantos.site
+repository=https://github.com/samuel-c-santos/qgis-satellite-downloader
+homepage=https://samuelsantos.site/
+category=Web
+tags=gee, landsat, sentinel, cbers, download, satellite, imagery
+icon=icon.png
+screenshots=icon.png
+experimental=False
+deprecated=False

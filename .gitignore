@@ -1,0 +1,18 @@
+# Arquivos de configuração e ambiente
+**/.env
+.ipynb_checkpoints/
+check_gee_assets.ipynb
+
+# Credenciais e dados sensíveis
+**/secrets/
+**/__pycache__/
+downloads/
+**/doc-cbers/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
