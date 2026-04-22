@@ -5,6 +5,7 @@ import requests
 import logging
 from dotenv import load_dotenv
 import calendar
+import urllib.parse
 try:
     from qgis.core import QgsMessageLog, Qgis
 except ImportError:
@@ -372,3 +373,62 @@ def get_cbers_image_inpe(region_ee, year, months, output_dir, scale_factor=2):
     except Exception as e:
         logger.error(f"❌ Erro no processamento CBERS: {e}")
         return None
+
+def get_planet_api_key():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    plugin_dir = os.path.dirname(script_dir)
+    env_path = os.path.join(plugin_dir, '.env')
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+    planet_api_url = os.getenv('PLANET_API', '')
+    if not planet_api_url:
+        return None
+    parsed = urllib.parse.urlparse(planet_api_url)
+    params = urllib.parse.parse_qs(parsed.query)
+    api_key = params.get('api_key', [None])[0]
+    return api_key
+
+def build_planet_wmts_uri(layer_name):
+    api_key = get_planet_api_key()
+    if not api_key:
+        logger.error("PLANET_API não configurado. Verifique o arquivo .env")
+        return None
+    wmts_url = f"https://api.planet.com/basemaps/v1/mosaics/wmts?api_key={api_key}"
+    encoded_url = urllib.parse.quote(wmts_url, safe='')
+    uri = (
+        f"crs=EPSG:3857"
+        f"&format=image/png"
+        f"&layers={layer_name}"
+        f"&styles=Default"
+        f"&tileMatrixSet=GoogleMapsCompatible15"
+        f"&url={encoded_url}"
+    )
+    return uri
+
+def build_planet_layer_name(mosaic_type, year=None, month=None, quarter=None):
+    if mosaic_type == 'latest_monthly':
+        return 'Latest Global Monthly'
+    elif mosaic_type == 'latest_quarterly':
+        return 'Latest Global Quarterly'
+    elif mosaic_type == 'monthly':
+        return f'global_monthly_{year}_{month:02d}_mosaic'
+    elif mosaic_type == 'quarterly':
+        return f'global_quarterly_{year}q{quarter}_mosaic'
+    return None
+
+def build_planet_layer_title(layer_name):
+    if layer_name == 'Latest Global Monthly':
+        return 'Planet - Mais Recente Mensal'
+    elif layer_name == 'Latest Global Quarterly':
+        return 'Planet - Mais Recente Trimestral'
+    name = layer_name.replace('global_', '').replace('_mosaic', '')
+    if name.startswith('monthly_'):
+        parts = name.replace('monthly_', '').split('_')
+        if len(parts) == 2:
+            return f'Planet Mensal {parts[0]}-{parts[1]}'
+    elif name.startswith('quarterly_'):
+        import re
+        match = re.match(r'quarterly_(\d{4})(q\d)', name)
+        if match:
+            return f'Planet Trimestral {match.group(1)}-{match.group(2)}'
+    return f'Planet {layer_name}'
