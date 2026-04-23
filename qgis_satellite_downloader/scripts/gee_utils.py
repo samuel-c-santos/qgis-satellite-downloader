@@ -432,3 +432,202 @@ def build_planet_layer_title(layer_name):
         if match:
             return f'Planet Trimestral {match.group(1)}-{match.group(2)}'
     return f'Planet {layer_name}'
+
+PLANET_API_BASE = "https://api.planet.com"
+
+def search_planet_scenes(api_key, bbox_wsen, start_date, end_date, cloud_cover_max=10, item_type='PSScene', limit=50):
+    import json
+    url = f"{PLANET_API_BASE}/data/v1/quick-search"
+    aoi = {
+        "type": "Polygon",
+        "coordinates": [[
+            [bbox_wsen[0], bbox_wsen[1]],
+            [bbox_wsen[2], bbox_wsen[1]],
+            [bbox_wsen[2], bbox_wsen[3]],
+            [bbox_wsen[0], bbox_wsen[3]],
+            [bbox_wsen[0], bbox_wsen[1]]
+        ]]
+    }
+    search_body = {
+        "item_types": [item_type],
+        "filter": {
+            "type": "AndFilter",
+            "config": [
+                {
+                    "type": "GeometryFilter",
+                    "field_name": "geometry",
+                    "config": aoi
+                },
+                {
+                    "type": "DateRangeFilter",
+                    "field_name": "acquired",
+                    "config": {
+                        "gte": f"{start_date}T00:00:00Z",
+                        "lte": f"{end_date}T23:59:59Z"
+                    }
+                },
+                {
+                    "type": "RangeFilter",
+                    "field_name": "cloud_cover",
+                    "config": {"lte": cloud_cover_max / 100.0}
+                },
+                {
+                    "type": "RangeFilter",
+                    "field_name": "clear_percent",
+                    "config": {"gte": max(0, 100 - cloud_cover_max) / 100.0 * 100}
+                }
+            ]
+        }
+    }
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Basic {_planet_b64(api_key)}'
+    }
+    try:
+        resp = requests.post(url, json=search_body, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            logger.error(f"Planet Data API error: {resp.status_code} {resp.text[:500]}")
+            return []
+        data = resp.json()
+        results = []
+        for feat in data.get('features', []):
+            props = feat.get('properties', {})
+            results.append({
+                'id': feat.get('id', ''),
+                'acquired': props.get('acquired', ''),
+                'cloud_cover': props.get('cloud_cover', 0),
+                'clear_percent': props.get('clear_percent', 0),
+                'item_type': item_type,
+                'geometry': feat.get('geometry', {})
+            })
+        return results
+    except Exception as e:
+        logger.error(f"Erro ao buscar cenas Planet: {e}")
+        return []
+
+def create_planet_order(api_key, scene_ids, item_type, aoi_geojson, bundle='analytic_8b_udm2', order_name='qgis_download'):
+    import json
+    url = f"{PLANET_API_BASE}/compute/ops/orders/v2"
+    if aoi_geojson.get('type') == 'Polygon' and len(aoi_geojson.get('coordinates', [[]])[0]) > 5:
+        clip_coords = aoi_geojson['coordinates'][0][:5]
+    else:
+        clip_coords = aoi_geojson.get('coordinates', [[]])[0]
+    clip_aoi = {
+        "type": "Polygon",
+        "coordinates": [clip_coords]
+    }
+    order_body = {
+        "name": order_name,
+        "products": [{
+            "item_ids": scene_ids,
+            "item_type": item_type,
+            "product_bundle": bundle
+        }],
+        "tools": [{"clip": {"aoi": clip_aoi}}],
+        "delivery": {"single_archive": True, "archive_type": "zip"}
+    }
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Basic {_planet_b64(api_key)}'
+    }
+    try:
+        resp = requests.post(url, json=order_body, headers=headers, timeout=30)
+        if resp.status_code not in (200, 201, 202):
+            logger.error(f"Planet Orders API error: {resp.status_code} {resp.text[:500]}")
+            return None
+        data = resp.json()
+        order_id = data.get('id')
+        logger.info(f"Pedido Planet criado: {order_id} ({len(scene_ids)} cena(s))")
+        return order_id
+    except Exception as e:
+        logger.error(f"Erro ao criar pedido Planet: {e}")
+        return None
+
+def wait_planet_order(api_key, order_id, poll_interval=10, timeout=600):
+    url = f"{PLANET_API_BASE}/compute/ops/orders/v2/{order_id}"
+    headers = {'Authorization': f'Basic {_planet_b64(api_key)}'}
+    elapsed = 0
+    while elapsed < timeout:
+        try:
+            resp = requests.get(url, headers=headers, timeout=30)
+            if resp.status_code != 200:
+                logger.warning(f"Poll erro {resp.status_code}, retrying...")
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+                continue
+            data = resp.json()
+            state = data.get('state', 'unknown')
+            logger.info(f"Pedido {order_id}: estado={state} ({elapsed}s/{timeout}s)")
+            if state == 'success':
+                return data
+            elif state == 'failed':
+                error_hints = data.get('error_hints', [])
+                last_error = data.get('last_message', '')
+                logger.error(f"Pedido falhou: {last_error} | hints: {error_hints}")
+                return data
+            elif state in ('queued', 'running', 'processing'):
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+            else:
+                logger.warning(f"Estado desconhecido: {state}")
+                time.sleep(poll_interval)
+                elapsed += poll_interval
+        except Exception as e:
+            logger.warning(f"Poll exception: {e}")
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+    logger.error(f"Timeout esperando pedido {order_id}")
+    return None
+
+def download_planet_order_results(api_key, order_id, output_dir):
+    import zipfile
+    url = f"{PLANET_API_BASE}/compute/ops/orders/v2/{order_id}/results"
+    headers = {'Authorization': f'Basic {_planet_b64(api_key)}'}
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            logger.error(f"Erro ao obter resultados: {resp.status_code}")
+            return []
+        data = resp.json()
+        downloads = []
+        for entry in data.get('results', []):
+            name = entry.get('name', 'planet_scene')
+            download_url = entry.get('location', '')
+            if not download_url:
+                continue
+            local_path = os.path.join(output_dir, name)
+            logger.info(f"Baixando {name}...")
+            r = requests.get(download_url, stream=True, timeout=300)
+            if r.status_code == 200:
+                os.makedirs(os.path.dirname(local_path) if os.path.dirname(local_path) else output_dir, exist_ok=True)
+                with open(local_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                downloads.append(local_path)
+            else:
+                logger.warning(f"Falha ao baixar {name}: HTTP {r.status_code}")
+        extracted = []
+        for dl in downloads:
+            if dl.lower().endswith('.zip'):
+                logger.info(f"Extraindo {os.path.basename(dl)}...")
+                try:
+                    with zipfile.ZipFile(dl, 'r') as zf:
+                        zf.extractall(os.path.dirname(dl))
+                    for f in zf.namelist():
+                        full = os.path.join(os.path.dirname(dl), f)
+                        if f.lower().endswith(('.tif', '.tiff')) and not f.startswith('__'):
+                            extracted.append(full)
+                except Exception as e:
+                    logger.warning(f"Erro ao extrair zip: {e}")
+            elif dl.lower().endswith(('.tif', '.tiff')):
+                extracted.append(dl)
+        return extracted
+    except Exception as e:
+        logger.error(f"Erro no download de resultados Planet: {e}")
+        return []
+
+def _planet_b64(api_key):
+    import base64
+    return base64.b64encode(f'{api_key}:'.encode()).decode()
+
+import time

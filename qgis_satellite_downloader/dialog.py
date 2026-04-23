@@ -24,14 +24,18 @@ try:
                                  get_download_url, download_image, get_cbers_image_inpe, 
                                  check_cbers_deps, build_planet_wmts_uri, 
                                  build_planet_layer_name, build_planet_layer_title,
-                                 get_planet_api_key)
+                                 get_planet_api_key, search_planet_scenes, 
+                                 create_planet_order, wait_planet_order,
+                                 download_planet_order_results)
 except ImportError:
     try:
         from gee_utils import (initialize_gee, get_sentinel_image, get_landsat_image, 
                              get_download_url, download_image, get_cbers_image_inpe, 
                              check_cbers_deps, build_planet_wmts_uri, 
                              build_planet_layer_name, build_planet_layer_title,
-                             get_planet_api_key)
+                             get_planet_api_key, search_planet_scenes,
+                             create_planet_order, wait_planet_order,
+                             download_planet_order_results)
     except ImportError as e:
         QgsMessageLog.logMessage(f"Erro ao importar scripts: {e}", "QGIS Satellite Downloader", Qgis.MessageLevel.Critical)
 
@@ -84,7 +88,7 @@ class QGISGeoDownloaderDialog(QDialog):
         # Satellite
         params_layout.addWidget(QLabel("Satélite:"), 0, 0)
         self.sat_combo = QComboBox()
-        self.sat_combo.addItems(["Sentinel", "Landsat", "CBERS-4A (MUX/WPM)", "Planet Basemap"])
+        self.sat_combo.addItems(["Sentinel", "Landsat", "CBERS-4A (MUX/WPM)", "Planet Basemap", "PlanetScope (Cenas)"])
         self.sat_combo.currentTextChanged.connect(self.on_satellite_changed)
         params_layout.addWidget(self.sat_combo, 0, 1)
 
@@ -219,6 +223,37 @@ class QGISGeoDownloaderDialog(QDialog):
             self.semester_combo = QComboBox()
             self.semester_combo.addItems(["1º Semestre", "2º Semestre", "Ambos"])
             self.dynamic_layout.addWidget(self.semester_combo)
+        elif "Planet" in sat and "Cenas" in sat:
+            self.dynamic_layout.addWidget(QLabel("Filtro de Nuvens (%):"))
+            self.planet_cloud_spin = QDoubleSpinBox()
+            self.planet_cloud_spin.setRange(0, 100)
+            self.planet_cloud_spin.setValue(10)
+            self.planet_cloud_spin.setSingleStep(5)
+            self.dynamic_layout.addWidget(self.planet_cloud_spin)
+
+            self.dynamic_layout.addWidget(QLabel("Tipo de Produto:"))
+            self.planet_bundle_combo = QComboBox()
+            self.planet_bundle_combo.addItem("Visual (RGB)", "visual")
+            self.planet_bundle_combo.addItem("Analítico 4 Bandas (RGB+NIR)", "analytic_4b_udm2")
+            self.planet_bundle_combo.addItem("Analítico 8 Bandas", "analytic_8b_udm2")
+            self.dynamic_layout.addWidget(self.planet_bundle_combo)
+
+            self.dynamic_layout.addWidget(QLabel("Meses:"))
+            self.ps_month_group = QFrame()
+            ps_month_grid = QGridLayout(self.ps_month_group)
+            self.ps_month_checks = []
+            months = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"]
+            for i, name in enumerate(months):
+                cb = QCheckBox(name)
+                if i in [5, 6, 7]: cb.setChecked(True)
+                ps_month_grid.addWidget(cb, i // 4, i % 4)
+                self.ps_month_checks.append(cb)
+            self.dynamic_layout.addWidget(self.ps_month_group)
+
+            ps_info = QLabel("🛰️ Cenas PlanetScope 3m | Busca e download via API\nMax 50 cenas por requisição | Recorte automático ao AOI")
+            ps_info.setStyleSheet("color: #666; font-size: 10pt;")
+            ps_info.setWordWrap(True)
+            self.dynamic_layout.addWidget(ps_info)
         elif "Planet" in sat:
             self.dynamic_layout.addWidget(QLabel("Tipo de Mosaico:"))
             self.planet_type_combo = QComboBox()
@@ -292,16 +327,22 @@ class QGISGeoDownloaderDialog(QDialog):
         """Update UI options based on selected satellite."""
         is_cbers = "CBERS" in text
         is_planet = "Planet" in text
+        is_planetscope = "PlanetScope" in text or "Cenas" in text
         self.method_combo.setEnabled(not is_cbers and not is_planet)
         self.buffer_spin.setEnabled(not is_planet)
         if is_cbers:
             self.method_combo.setToolTip("CBERS utiliza a melhor cena disponível (menor cobertura de nuvens) do INPE.")
         elif is_planet:
-            self.method_combo.setToolTip("Planet utiliza mosaicos WMTS — composição não se aplica.")
+            self.method_combo.setToolTip("Planet utiliza mosaicos WMTS ou cenas — composição não se aplica.")
         else:
             self.method_combo.setToolTip("")
         
-        if is_planet:
+        if is_planetscope:
+            self.download_btn.setText("BUSCAR E BAIXAR")
+            self.add_to_canvas_check.setChecked(True)
+            self.add_to_canvas_check.setEnabled(True)
+            self.output_entry.setEnabled(True)
+        elif is_planet:
             self.download_btn.setText("ADICIONAR AO MAPA")
             self.add_to_canvas_check.setChecked(True)
             self.add_to_canvas_check.setEnabled(False)
@@ -392,6 +433,7 @@ class QGISGeoDownloaderDialog(QDialog):
                 years = [int(y) for y in years_raw.split(',')]
 
             is_planet = "planet" in sat.lower()
+            is_planetscope = "planetscope" in sat.lower() or "cenas" in sat.lower()
             is_cbers = "cbers" in sat.lower()
 
             buffer_factor = self.buffer_spin.value()
@@ -405,8 +447,31 @@ class QGISGeoDownloaderDialog(QDialog):
 
             if not self._is_running: return
 
-            # Planet WMTS branch (no GEE, no download, just add WMTS layers)
-            if is_planet:
+            # Calculate extent (needed for PlanetScope and GEE sources)
+            if self.use_layer_check.isChecked():
+                layer_id = self.layer_combo.currentData()
+                layer = QgsProject.instance().mapLayer(layer_id)
+                if not layer:
+                    self.logger.error("  ❌ Camada selecionada não encontrada.")
+                    return
+                self.logger.info(f"\n🌍 Área: Extensão da Camada '{layer.name()}'")
+                extent = layer.extent()
+                src_crs = layer.crs()
+                dest_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+                if src_crs != dest_crs:
+                    xform = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
+                    extent = xform.transformBoundingBox(extent)
+            else:
+                self.logger.info("\n🌍 Área: Extensão Atual do Mapa")
+                extent = self.iface.mapCanvas().extent()
+                src_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
+                dest_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+                if src_crs != dest_crs:
+                    xform = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
+                    extent = xform.transformBoundingBox(extent)
+
+            # Planet Basemap WMTS branch (no GEE, no download, just add WMTS layers)
+            if is_planet and not is_planetscope:
                 for year in years:
                     if not self._is_running: break
                     planet_type = self.planet_type_combo.currentText()
@@ -445,38 +510,92 @@ class QGISGeoDownloaderDialog(QDialog):
                             uri = build_planet_wmts_uri(layer_name)
                             if uri:
                                 self.log_signal.load_wmts_layer.emit(uri, title)
-            else:
+            elif is_planetscope:
+                # PlanetScope: search scenes, create order, download
+                api_key = get_planet_api_key()
+                if not api_key:
+                    self.logger.error("❌ PLANET_API não configurada. Verifique o arquivo .env")
+                    return
+
+                cloud_max = self.planet_cloud_spin.value()
+                bundle = self.planet_bundle_combo.currentData()
+                selected_months = [i+1 for i, cb in enumerate(self.ps_month_checks) if cb.isChecked()]
+                if not selected_months:
+                    self.logger.error("❌ Selecione pelo menos um mês.")
+                    return
+
+                car_dir = os.path.join(output_dir, "PlanetScope")
+                os.makedirs(car_dir, exist_ok=True)
+
+                for year in years:
+                    if not self._is_running: break
+                    for month in selected_months:
+                        if not self._is_running: break
+                        import calendar as cal_module
+                        _, last_day = cal_module.monthrange(year, month)
+                        start_date = f"{year}-{month:02d}-01"
+                        end_date = f"{year}-{month:02d}-{last_day}"
+
+                        bbox_wsen = [extent.xMinimum(), extent.yMinimum(), extent.xMaximum(), extent.yMaximum()]
+
+                        self.logger.info(f"🔍 Buscando cenas PlanetScope {year}-{month:02d} (nuvens ≤ {cloud_max}%)...")
+                        scenes = search_planet_scenes(api_key, bbox_wsen, start_date, end_date, 
+                                                      cloud_cover_max=cloud_max, item_type='PSScene', limit=50)
+
+                        if not scenes:
+                            self.logger.warning(f"  ⚠️ Nenhuma cena encontrada para {year}-{month:02d}")
+                            continue
+
+                        self.logger.info(f"  📡 {len(scenes)} cena(s) encontrada(s)")
+                        for s in scenes[:5]:
+                            self.logger.info(f"    - {s['id']}: {s['acquired'][:10]} | nuvens {s['cloud_cover']*100:.1f}%")
+
+                        scene_ids = [s['id'] for s in scenes]
+                        aoi_geojson = {
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [bbox_wsen[0], bbox_wsen[1]],
+                                [bbox_wsen[2], bbox_wsen[1]],
+                                [bbox_wsen[2], bbox_wsen[3]],
+                                [bbox_wsen[0], bbox_wsen[3]],
+                                [bbox_wsen[0], bbox_wsen[1]]
+                            ]]
+                        }
+
+                        self.logger.info(f"  📦 Criando pedido para {len(scene_ids)} cena(s)...")
+                        order_id = create_planet_order(api_key, scene_ids, 'PSScene', aoi_geojson, bundle=bundle,
+                                                       order_name=f"qgis_{year}{month:02d}")
+
+                        if not order_id:
+                            self.logger.error(f"  ❌ Falha ao criar pedido Planet")
+                            continue
+
+                        self.logger.info(f"  ⏳ Aguardando processamento do pedido {order_id}...")
+                        result = wait_planet_order(api_key, order_id, poll_interval=10, timeout=600)
+
+                        if not result or result.get('state') != 'success':
+                            self.logger.error(f"  ❌ Pedido {order_id} não completou com sucesso")
+                            continue
+
+                        self.logger.info(f"  📥 Baixando resultados do pedido {order_id}...")
+                        files = download_planet_order_results(api_key, order_id, car_dir)
+
+                        if files and self.add_to_canvas_check.isChecked():
+                            for f in files:
+                                fname = os.path.basename(f)
+                                self.log_signal.log_received.emit(f"  📥 Carregando: {fname}", logging.INFO)
+                                self.log_signal.load_layer.emit(f, fname)
+                        elif not files:
+                            self.logger.warning(f"  ⚠️ Nenhum arquivo GeoTIFF encontrado no download")
+            elif not is_planet:
                 # Initialize GEE (not needed for Planet)
                 initialize_gee()
 
-                # Geometry Logic
+                region = ee.Geometry.Rectangle([extent.xMinimum(), extent.yMinimum(), extent.xMaximum(), extent.yMaximum()])
+
                 if self.use_layer_check.isChecked():
-                    layer_id = self.layer_combo.currentData()
-                    layer = QgsProject.instance().mapLayer(layer_id)
-                    if not layer:
-                        self.logger.error("  ❌ Camada selecionada não encontrada.")
-                        return
-                    
-                    self.logger.info(f"\n🌍 Área: Extensão da Camada '{layer.name()}'")
-                    extent = layer.extent()
-                    src_crs = layer.crs()
-                    dest_crs = QgsCoordinateReferenceSystem("EPSG:4326")
-                    if src_crs != dest_crs:
-                        xform = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
-                        extent = xform.transformBoundingBox(extent)
-                    
-                    region = ee.Geometry.Rectangle([extent.xMinimum(), extent.yMinimum(), extent.xMaximum(), extent.yMaximum()])
                     label = f"Layer_{layer.name()}"
                 else:
-                    self.logger.info("\n🌍 Área: Extensão Atual do Mapa")
-                    extent = self.iface.mapCanvas().extent()
-                    src_crs = self.iface.mapCanvas().mapSettings().destinationCrs()
-                    dest_crs = QgsCoordinateReferenceSystem("EPSG:4326")
-                    if src_crs != dest_crs:
-                        xform = QgsCoordinateTransform(src_crs, dest_crs, QgsProject.instance())
-                        extent = xform.transformBoundingBox(extent)
-                    
-                    region = ee.Geometry.Rectangle([extent.xMinimum(), extent.yMinimum(), extent.xMaximum(), extent.yMaximum()])
                     label = "Map_Extent"
 
                 car_dir = os.path.join(output_dir, label)
