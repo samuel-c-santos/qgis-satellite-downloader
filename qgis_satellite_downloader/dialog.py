@@ -22,14 +22,14 @@ import ee
 try:
     from scripts.gee_utils import (initialize_gee, get_sentinel_image, get_landsat_image, 
                                  get_download_url, download_image, get_cbers_image_inpe, 
-                                 check_cbers_deps, build_planet_wmts_uri, 
+                                 check_cbers_deps, get_spot_2008_image, build_planet_wmts_uri, 
                                  build_planet_layer_name, build_planet_layer_title,
                                  get_planet_api_key)
 except ImportError:
     try:
         from gee_utils import (initialize_gee, get_sentinel_image, get_landsat_image, 
                              get_download_url, download_image, get_cbers_image_inpe, 
-                             check_cbers_deps, build_planet_wmts_uri, 
+                             check_cbers_deps, get_spot_2008_image, build_planet_wmts_uri, 
                              build_planet_layer_name, build_planet_layer_title,
                              get_planet_api_key)
     except ImportError as e:
@@ -84,7 +84,7 @@ class QGISGeoDownloaderDialog(QDialog):
         # Satellite
         params_layout.addWidget(QLabel("Satélite:"), 0, 0)
         self.sat_combo = QComboBox()
-        self.sat_combo.addItems(["Sentinel", "Landsat", "CBERS-4A (MUX/WPM)", "Planet Basemap"])
+        self.sat_combo.addItems(["Sentinel", "Landsat", "CBERS-4A (MUX/WPM)", "SPOT 2008 (Código Florestal)", "Planet Basemap"])
         self.sat_combo.currentTextChanged.connect(self.on_satellite_changed)
         params_layout.addWidget(self.sat_combo, 0, 1)
 
@@ -219,6 +219,13 @@ class QGISGeoDownloaderDialog(QDialog):
             self.semester_combo = QComboBox()
             self.semester_combo.addItems(["1º Semestre", "2º Semestre", "Ambos"])
             self.dynamic_layout.addWidget(self.semester_combo)
+        elif "SPOT 2008" in sat:
+            info_label = QLabel("Mosaico SPOT 2007-2009 - Resolução 5m\nCódigo Florestal (referência: jul/2008)\nDisponível para Brasil via GEE")
+            info_label.setWordWrap(True)
+            self.dynamic_layout.addWidget(info_label)
+            spot_info = QLabel("📅 Período disponível: 2007-2009")
+            spot_info.setStyleSheet("color: #666; font-size: 10pt;")
+            self.dynamic_layout.addWidget(spot_info)
         elif "Planet" in sat:
             self.dynamic_layout.addWidget(QLabel("Tipo de Mosaico:"))
             self.planet_type_combo = QComboBox()
@@ -291,17 +298,20 @@ class QGISGeoDownloaderDialog(QDialog):
     def on_satellite_changed(self, text):
         """Update UI options based on selected satellite."""
         is_cbers = "CBERS" in text
+        is_spot_2008 = "SPOT 2008" in text
         is_planet = "Planet" in text
-        self.method_combo.setEnabled(not is_cbers and not is_planet)
+        self.method_combo.setEnabled(not is_cbers and not is_spot_2008 and not is_planet)
         self.buffer_spin.setEnabled(not is_planet)
         if is_cbers:
             self.method_combo.setToolTip("CBERS utiliza a melhor cena disponível (menor cobertura de nuvens) do INPE.")
+        elif is_spot_2008:
+            self.method_combo.setToolTip("SPOT usa o mosaico de 2008 para Código Florestal.")
         elif is_planet:
             self.method_combo.setToolTip("Planet utiliza mosaicos WMTS — composição não se aplica.")
         else:
             self.method_combo.setToolTip("")
         
-        if is_planet:
+        if is_planet and "Cenas" not in text:
             self.download_btn.setText("ADICIONAR AO MAPA")
             self.add_to_canvas_check.setChecked(True)
             self.add_to_canvas_check.setEnabled(False)
@@ -392,7 +402,9 @@ class QGISGeoDownloaderDialog(QDialog):
                 years = [int(y) for y in years_raw.split(',')]
 
             is_planet = "planet" in sat.lower()
+            is_planetscope = "planetscope" in sat.lower() or "cenas" in sat.lower()
             is_cbers = "cbers" in sat.lower()
+            is_spot_2008 = "spot" in sat.lower()
 
             buffer_factor = self.buffer_spin.value()
             comp_method = self.method_combo.currentData()
@@ -518,14 +530,20 @@ class QGISGeoDownloaderDialog(QDialog):
                                 if final_path and self.add_to_canvas_check.isChecked():
                                     self.log_signal.load_layer.emit(final_path, os.path.basename(final_path))
                     else:
-                        # Landsat
-                        sem_choice = self.semester_combo.currentText()
-                        semesters = [1] if sem_choice == "1º Semestre" else [2] if sem_choice == "2º Semestre" else [1, 2]
-                        for sem in semesters:
-                            self.logger.info(f"  📅 {year} S{sem} (Landsat)")
-                            img, _ = get_landsat_image(region, year, sem, method=comp_method)
+                        # Landsat (or SPOT fallback)
+                        if is_spot_2008:
+                            self.logger.info(f"  📅 SPOT 2008 - Mosaico Código Florestal (5m)")
+                            img = get_spot_2008_image(region)
                             if img:
-                                self._download_and_load(img, region, year, f"S{sem}", car_dir, 30, "Landsat", buffer_factor)
+                                self._download_and_load(img, region, 2008, "CF", car_dir, 5, "SPOT2008", buffer_factor)
+                        else:
+                            sem_choice = self.semester_combo.currentText()
+                            semesters = [1] if sem_choice == "1º Semestre" else [2] if sem_choice == "2º Semestre" else [1, 2]
+                            for sem in semesters:
+                                self.logger.info(f"  📅 {year} S{sem} (Landsat)")
+                                img, _ = get_landsat_image(region, year, sem, method=comp_method)
+                                if img:
+                                    self._download_and_load(img, region, year, f"S{sem}", car_dir, 30, "Landsat", buffer_factor)
 
             self.logger.info("\n✨ Processo concluído!")
 

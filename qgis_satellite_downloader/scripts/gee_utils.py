@@ -216,6 +216,19 @@ def download_image(url, output_path):
         logger.error(f"❌ Error downloading {output_path}: {e}")
         return False
 
+def get_spot_2008_image(region):
+    """Retrieves the Brazil Forest 2008 SPOT mosaic (5m resolution)."""
+    try:
+        image = ee.Image("GOOGLE/BRAZIL_FOREST_2008/V1/VISUAL")
+        clipped = image.clip(region)
+        clipped.getInfo()
+        logger.info("  [SPOT] SPOT 2008 - Mosaico Código Florestal (5m)")
+        return clipped.select(['R', 'G', 'B'])
+    except Exception as e:
+        logger.error(f"  ❌ Erro ao acessar SPOT 2008: {e}")
+        logger.error("  ℹ️ Verifique se o acesso ao dataset foi aprovado via formulário Google")
+        return None
+
 def get_cbers_image_inpe(region_ee, year, months, output_dir, scale_factor=2):
     """Downloads and processes CBERS-4A imagery from INPE STAC with an optional border."""
     has_deps, err = check_cbers_deps()
