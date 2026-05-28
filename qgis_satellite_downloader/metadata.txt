@@ -1,6 +1,7 @@
 [general]
 name=QGIS Satellite Downloader
 qgisMinimumVersion=3.0
+qgisMaximumVersion=4.99
 description=Plugin para download de imagens Sentinel, Landsat e CBERS-4A via GEE e INPE. Desenvolvido por Samuel Santos.
 about=<b>QGIS Satellite Downloader</b>
   <i>Plugin para download de imagens orbitais (Sentinel, Landsat e CBERS-4A) via Google Earth Engine e INPE.</i>

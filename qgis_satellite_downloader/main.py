@@ -1,7 +1,7 @@
 import os
 import sys
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
-from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtGui import QIcon, QPixmap
 from qgis.PyQt.QtWidgets import QAction
 
 from .dialog import QGISGeoDownloaderDialog
@@ -30,7 +30,8 @@ class QGISGeoDownloader:
         del self.toolbar
 
     def add_action(self, icon_path, text, callback, enabled_flag=True, add_to_menu=True, add_to_toolbar=True, status_tip=None, parent=None):
-        icon = QIcon(icon_path)
+        pixmap = QPixmap(icon_path)
+        icon = QIcon(pixmap)
         action = QAction(icon, text, parent)
         action.triggered.connect(callback)
         action.setEnabled(enabled_flag)
@@ -39,7 +40,7 @@ class QGISGeoDownloader:
             action.setStatusTip(status_tip)
 
         if add_to_toolbar:
-            self.iface.addToolBarIcon(action)
+            self.toolbar.addAction(action)
 
         if add_to_menu:
             self.iface.addPluginToMenu(self.menu, action)

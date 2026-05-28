@@ -348,9 +348,9 @@ class QGISGeoDownloaderDialog(QDialog):
         reply = QMessageBox.question(self, "Instalação", 
                                    "Isso irá instalar as bibliotecas cbers4asat, rasterio e outras no seu QGIS. \n\n"
                                    "O processo ocorrerá em uma JANELA PRETA (Terminal) separada. \n"
-                                   "Deseja continuar?", QMessageBox.Yes | QMessageBox.No)
+                                   "Deseja continuar?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         
-        if reply != QMessageBox.Yes:
+        if reply != QMessageBox.StandardButton.Yes:
             return
 
         self.install_btn.setEnabled(False)
