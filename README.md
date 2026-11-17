@@ -58,6 +58,6 @@ Este projeto está licenciado sob a **Licença MIT** - see the file [LICENSE](LI
 ## 4. Desenvolvedor
 
 **Samuel Santos**
-- [LinkedIn](https://www.linkedin.com/in/samuelsantos-amb/)
+- [LinkedIn](https://www.linkedin.com/in/samuel-santos-geo/)
 - [GitHub](https://github.com/samuel-c-santos)
 - [Site Pessoal](https://samuelsantos.site/)

@@ -13,7 +13,7 @@ about=<b>QGIS Satellite Downloader</b>
   - Interpolação Cúbica Automática.
   <br><br>
   <b>Suporte:</b> Samuel Santos
-  - <a href="https://www.linkedin.com/in/samuelsantos-amb/">LinkedIn</a>
+  - <a href="https://www.linkedin.com/in/samuel-santos-geo/">LinkedIn</a>
   - <a href="https://github.com/samuel-c-santos">GitHub</a>
   - <a href="https://samuelsantos.site/">Site Pessoal</a>
 version=1.0
